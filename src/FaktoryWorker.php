@@ -43,11 +43,19 @@ class FaktoryWorker
         $this->queues = $queues;
     }
 
+    /**
+     * @param string $jobType
+     * @param callable $callable
+     */
     public function register(string $jobType, callable $callable) : void
     {
         $this->jobTypes[$jobType] = $callable;
     }
 
+    /**
+     * @param bool $daemonize
+     * @throws \Exception
+     */
     public function run(bool $daemonize = false) : void
     {
         pcntl_async_signals(true);
@@ -62,7 +70,6 @@ class FaktoryWorker
 
         do {
             $job = $this->client->fetch($this->queues);
-
             if ($job !== null) {
                 $this->logger->debug($job['jid']);
 
