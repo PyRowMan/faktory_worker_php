@@ -9,7 +9,7 @@ composer require basekit/faktory_worker_php
 ## Add jobs
 
 ```php
-$client = new FaktoryClient($faktoryHost, $faktoryPort);
+$client = new FaktoryClient($faktoryHost, $faktoryPort, $faktoryPassword);
 $job = new FaktoryJob($id, $type, $args);
 $client->push($job);
 ```
@@ -17,7 +17,7 @@ $client->push($job);
 ## Process jobs
 
 ```php
-$client = new FaktoryClient($faktoryHost, $faktoryPort);
+$client = new FaktoryClient($faktoryHost, $faktoryPort, $faktoryPassword);
 $worker = new FaktoryWorker($client);
 $worker->register('somejob', function ($job) {
     echo "You got the job buddy!\n";
