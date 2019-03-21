@@ -2,8 +2,12 @@
 
 namespace BaseKit\Faktory;
 
+use Monolog\Logger;
+
 class FaktoryClient
 {
+    const STOP = 'STOP';
+    const QUIET = 'QUIET';
     /**
      * @var string
      */
@@ -25,19 +29,49 @@ class FaktoryClient
      */
     private $connection;
 
+    /** @var LoggerInterface $logger */
+    private $logger;
+
+    /** @var $time \DateTime */
+    private $time;
+
     /**
      * FaktoryClient constructor.
      * @param string $faktoryHost
      * @param int $faktoryPort
      * @param string|null $password
      */
-    public function __construct(string $faktoryHost, int $faktoryPort, ?string $password)
+    public function __construct(string $faktoryHost, int $faktoryPort, ?string $password = null)
     {
         $this->faktoryHost = $faktoryHost;
         $this->faktoryPort = $faktoryPort;
         $this->password = $password;
         $this->wid = uniqid();
         $this->pid = rand(1, 99999);
+        $this->time = new \DateTime();
+    }
+
+    /**
+     * @return LoggerInterface
+     */
+    public function getLogger()
+    {
+        return $this->logger;
+    }
+
+    /**
+     * @param LoggerInterface $logger
+     * @return FaktoryClient
+     */
+    public function setLogger($logger)
+    {
+        $this->logger = $logger;
+        return $this;
+    }
+
+    public function hasLogger()
+    {
+        return !empty($this->logger);
     }
 
     /**
@@ -45,7 +79,8 @@ class FaktoryClient
      */
     public function getConnection()
     {
-        $this->connection = $this->connect();
+        if(empty($this->connection))
+            $this->connection = $this->connect();
         return $this->connection;
     }
 
@@ -80,13 +115,22 @@ class FaktoryClient
         return $response;
     }
 
-    public function ack(string $jobId): void
+    /**
+     * @param string $jobId
+     * @param Logger|null $logger
+     */
+    public function ack(string $jobId, ?Logger $logger): void
     {
         $socket = $this->getConnection();
-        $this->writeLine($socket, 'ACK', json_encode(['jid' => $jobId]));
+        $response = $this->writeLine($socket, 'ACK', json_encode(['jid' => $jobId]));
+        var_dump($response);
         $this->close($socket);
+        $logger->debug("ACK sent for jobId : " . $jobId);
     }
 
+    /**
+     * @param string $jobId
+     */
     public function fail(string $jobId): void
     {
         $socket = $this->getConnection();
@@ -137,17 +181,29 @@ class FaktoryClient
         return $bytes;
     }
 
-    private function writeLine($socket, string $command, string $json): string
+    private function writeLine($socket, string $command, string $json, $shouldRespond = true): ?string
     {
         $buffer = $command . ' ' . $json . "\r\n";
         socket_write($socket, $buffer, strlen($buffer));
-        $read = $this->readLine($socket);
+        $this->log($command);
+        $read = ($shouldRespond) ? $this->readLine($socket) : null;
         return $read;
     }
 
+    /**
+     * @param $socket
+     */
     private function close($socket): void
     {
+        unset($this->connection);
         socket_close($socket);
+    }
+
+    public function end(): void
+    {
+        $socket = $this->getConnection();
+        $response = $this->writeLine($socket, 'END', '', false);
+        $this->close($socket);
     }
 
     private function hash($pwd, string $salt, int $iterations)
@@ -162,4 +218,34 @@ class FaktoryClient
         }
         return bin2hex($hash);
     }
+
+    /**
+     * @param $message
+     */
+    public function log($message)
+    {
+        if ($this->hasLogger()) {
+            $this->logger->debug($message);
+        }
+    }
+
+    public function beat()
+    {
+        $diff = (new \DateTime())->getTimestamp() - $this->time->getTimestamp();
+        if ($diff < 2) return false;
+        $socket = $this->getConnection();
+        $response = $this->writeLine($socket, 'BEAT', json_encode(['wid' => $this->wid]));
+        $this->close($socket);
+        if (!strpos($response, 'OK')) {
+            if (strpos($response, '$21') !== false)
+                return self::STOP;
+            elseif (strpos($response, '$17') !== false)
+                return self::QUIET;
+            else
+                throw new \Exception("Unknown error triggered from the server");
+        }
+        $this->time = new \DateTime();
+        return false;
+    }
+
 }

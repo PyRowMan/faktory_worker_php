@@ -35,6 +35,7 @@ class FaktoryWorker
     public function __construct(FaktoryClient $client, LoggerInterface $logger)
     {
         $this->client = $client;
+        $this->client->setLogger($logger);
         $this->logger = $logger;
     }
 
@@ -61,39 +62,65 @@ class FaktoryWorker
         pcntl_async_signals(true);
 
         pcntl_signal(SIGTERM, function ($signo) {
+            $this->client->log("SIGTERM received, exiting worker");
+            try{
+                $this->client->end();
+            } catch(\Exception $e) {
+                throw new \Exception($e);
+            }
             exit(0);
         });
 
         pcntl_signal(SIGINT, function ($signo) {
+            $this->logger->debug("SIGINT received, exiting worker");
+            try{
+                $this->client->end();
+            } catch(\Exception $e) {
+                throw new \Exception($e);
+            }
             exit(0);
         });
 
         do {
-            $job = $this->client->fetch($this->queues);
-            if ($job !== null) {
-                $this->logger->debug($job['jid']);
-
-                $callable = $this->jobTypes[$job['jobtype']];
-
-                $pid = pcntl_fork();
-                if ($pid === -1) {
-                    throw new \Exception('Could not fork');
+            try {
+                $beat = $this->client->beat();
+                if ($beat === FaktoryClient::STOP) {
+                    echo "Shutting down...";
+                    $this->stop = true;
+                } elseif ($beat === FaktoryClient::QUIET) {
+                    echo "Quieting...";
+                    continue;
                 }
+                $job = $this->client->fetch($this->queues);
+                if ($job !== null) {
+                    $this->client->log($job);
+                    $this->logger->debug($job['jid']);
 
-                if ($pid > 0) {
-                    pcntl_wait($status);
-                } else {
-                    try {
-                        call_user_func($callable, $job);
-                        $this->client->ack($job['jid']);
-                    } catch (\Exception $e) {
-                        $this->client->fail($job['jid']);
-                    } finally {
-                        exit(0);
+                    $callable = $this->jobTypes[$job['jobtype']];
+
+                    $pid = pcntl_fork();
+                    if ($pid === -1) {
+                        throw new \Exception('Could not fork');
+                    }
+
+                    if ($pid > 0) {
+                        pcntl_wait($status);
+                    } else {
+                        try {
+                            call_user_func($callable, $job);
+                            $this->client->ack($job['jid'], $this->logger);
+                        } catch (\Exception $e) {
+                            $this->client->fail($job['jid']);
+                        } finally {
+                            exit(0);
+                        }
                     }
                 }
+                usleep(100);
+            } catch (\Exception $e){
+                $this->client->end();
+                exit;
             }
-            usleep(100);
         } while($daemonize && !$this->stop);
     }
 }
